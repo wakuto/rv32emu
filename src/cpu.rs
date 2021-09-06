@@ -379,51 +379,55 @@ impl Cpu {
     Ok(())
   }
   
-  // memory access
+  // memory access ロード＆ストア
   pub fn memory_access(&mut self) -> Result<(), Exception> {
     let mut inst = self.ex_mem_reg.unwrap().inst;
     let addr = inst.result.unwrap() as usize;
     let jump_flag = self.ex_mem_reg.unwrap().jump_flag;
     
-    let mut result = 0;
-    match inst.ope_type {
-      InstructionType::I => {
-        if inst.opecode == 0x03 {
-          match inst.funct3.unwrap() {
-            // lb
-            0b000 => { result = Cpu::sign_extend(self.bus.read(addr).unwrap() as u32, 8); },
-            // lh
-            0b001 => {
-              let mut res = self.bus.read(addr).unwrap() as u32;
-              res |= (self.bus.read(addr+1).unwrap() as u32) << 8;
-              result = Cpu::sign_extend(res, 16);
-            },
-            // lw
-            0b010 => {
-              let mut res = 0 as u32;
-              for i in 0..4 {
-                res |= (self.bus.read(addr+i).unwrap() as u32) << (i * 8);
-              }
-              result = res;
-            },
-            // lbu
-            0b100 => { result = self.bus.read(addr).unwrap() as u32; },
-            // lhu
-            0b101 => {
-              result = self.bus.read(addr).unwrap() as u32;
-              result |= (self.bus.read(addr+1).unwrap() as u32) << 8;
+    match inst.opecode {
+      // load, I-Type
+      0x03 => {
+        let mut result = 0;
+        match inst.funct3.unwrap() {
+          // lb
+          0b000 => { 
+            result = Cpu::sign_extend(self.bus.read(addr).unwrap() as u32, 8); 
+          },
+          // lh
+          0b001 => {
+            result = self.bus.read(addr).unwrap() as u32;
+            result |= (self.bus.read(addr+1).unwrap() as u32) << 8;
+            result = Cpu::sign_extend(result, 16);
+          },
+          // lw
+          0b010 => {
+            for i in 0..4 {
+              result |= (self.bus.read(addr+i).unwrap() as u32) << (i * 8);
             }
-            _ => result = inst.result.unwrap(),//return Err(Exception::IllegalInstruction),
+          },
+          // lbu
+          0b100 => { 
+            result = self.bus.read(addr).unwrap() as u32; 
+          },
+          // lhu
+          0b101 => {
+            result = self.bus.read(addr).unwrap() as u32;
+            result |= (self.bus.read(addr+1).unwrap() as u32) << 8;
           }
-        } else {
-          result = inst.result.unwrap()
+          _ => return Err(Exception::IllegalInstruction),
         }
-      }
-      InstructionType::S => {
+        inst.result = Some(result);
+      },
+      // store S-Type
+      0x23 => {
+        inst.result = None;
         let rs2 = inst.rs2.unwrap();
         match inst.funct3.unwrap() {
           // sb
-          0b000 => { self.bus.write(addr, rs2 as u8).unwrap(); },
+          0b000 => { 
+            self.bus.write(addr, rs2 as u8).unwrap(); 
+          },
           // sh
           0b001 => { 
             self.bus.write(addr, rs2 as u8).unwrap();
@@ -435,12 +439,12 @@ impl Cpu {
               self.bus.write(addr+i, (rs2 >> (i * 8)) as u8).unwrap();
             }
           },
-          _ => result = inst.result.unwrap(),//return Err(Exception::IllegalInstruction),
+          _ => return Err(Exception::IllegalInstruction),
         }
-      }
-      _ => result = inst.result.unwrap(),//return Err(Exception::IllegalInstruction),
+      },
+      _ => (),
     }
-    inst.result = Some(result);
+
     self.mem_wb_reg = Some(MemWb{ inst, jump_flag });
     Ok(())
   }
@@ -449,32 +453,32 @@ impl Cpu {
   pub fn writeback(&mut self) -> Result<(), Exception> {
     let inst = self.mem_wb_reg.unwrap().inst;
     let jump_flag = self.mem_wb_reg.unwrap().jump_flag;
-    let result = inst.result.unwrap();
+
     match inst.opecode {
       // R-Type | ld I-Type | lui
       0x33 | 0x03 | 0x13 | 0x37 => {
         let rd = inst.rd.unwrap() as usize;
-        self.reg[rd] = result;
+        self.reg[rd] = inst.result.unwrap();
       }, 
       // I-Type
       // ja
       0x67 => {
         let rd = inst.rd.unwrap() as usize;
         let tmp = self.pc + 4;
-        self.pc = result;
+        self.pc = inst.result.unwrap();
         self.reg[rd] = tmp;
       },
       // J-Type
       0x6F => {
         let rd = inst.rd.unwrap() as usize;
         self.reg[rd] = self.pc + 4;
-        self.pc = self.pc.wrapping_add(result);
+        self.pc = self.pc.wrapping_add(inst.result.unwrap());
       },
       // B-Type | aui
       0x63 | 0x17 => {
-        self.pc = self.pc.wrapping_add(result);
+        self.pc = self.pc.wrapping_add(inst.result.unwrap());
       },
-      _ => (),//return Err(Exception::IllegalInstruction),
+      _ => (),
     };
 
     if !jump_flag {
@@ -485,7 +489,6 @@ impl Cpu {
     if self.step_processing {
       let mut s = String::new();
       std::io::stdin().read_line(&mut s).unwrap();
-      println!("pc: {:>08x}", self.pc);
       self.print_registers();
     }
 
@@ -520,6 +523,7 @@ impl Cpu {
 
 #[allow(dead_code)]
   pub fn print_registers(&self) {
+    println!("pc 0x{:>08x}", self.pc);
     println!("x00 / zero\t0x{:>08X}\tx01 / ra\t0x{:>08X}\tx02 / sp\t0x{:>08X}\tx03 / gp\t0x{:>08X}", self.reg[0], self.reg[1], self.reg[2], self.reg[3]);
     println!("x04 / tp\t0x{:>08X}\tx05 / t0\t0x{:>08X}\tx06 / t1\t0x{:>08X}\tx07 / t2\t0x{:>08X}", self.reg[4], self.reg[5], self.reg[6], self.reg[7]);
     println!("x08 / s0 / fp\t0x{:>08X}\tx09 / s1\t0x{:>08X}\tx10 / a0\t0x{:>08X}\tx11 / a1\t0x{:>08X}", self.reg[8], self.reg[9], self.reg[10], self.reg[11]);
